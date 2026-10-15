@@ -925,6 +925,112 @@ async def test_new_run_treats_unreceived_calls_from_cancelled_prior_run_as_not_s
 
 
 @pytest.mark.asyncio
+async def test_cancelled_prior_run_with_existing_execution_recovers_ledger() -> None:
+    tenant_id = uuid.uuid4()
+    prior_run_id = uuid.uuid4()
+    model = _model(tenant_id)
+    agent = _agent(tenant_id)
+    state = _state(tenant_id, model, agent)
+    context = _context(state)
+    state["messages"] = [
+        {
+            "id": "prior-proposal",
+            "role": "assistant",
+            "runtime_run_id": str(prior_run_id),
+            "tool_calls": [
+                {
+                    "id": "cancelled-call",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": '{"path":"stale.md"}',
+                    },
+                }
+            ],
+            "content": "",
+        },
+        {
+            "id": "current-input",
+            "role": "user",
+            "runtime_input": "current",
+            "runtime_run_id": context.run_id,
+            "content": "Continue from the ledger",
+        },
+    ]
+    state.pop("registry")
+    builder = _ContextBuilder(_build())
+
+    prior_execution = AgentToolExecution(
+        id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        run_id=prior_run_id,
+        tool_call_id="cancelled-call",
+        tool_name="read_file",
+        assistant_message_id="prior-proposal",
+        arguments_hash="hash",
+        sanitized_arguments={"path": "stale.md"},
+        effect="read",
+        retry_policy="safe",
+        status="failed",
+    )
+
+    class _CancelledPriorRunDB:
+        def __init__(self) -> None:
+            self.results = iter(
+                (
+                    _Result([model]),
+                    _Result([agent]),
+                    _Result(),
+                    _Result([prior_run_id]),
+                    _Result([prior_execution]),
+                )
+            )
+
+        async def execute(self, statement):
+            del statement
+            return next(self.results)
+
+    @asynccontextmanager
+    async def session_factory():
+        yield _CancelledPriorRunDB()
+
+    async def complete(_model_arg, _messages, **_kwargs):
+        return LLMCompletionStep(
+            content="",
+            tool_calls=(
+                {
+                    "id": "finish-recovered-run",
+                    "type": "function",
+                    "function": {
+                        "name": "finish",
+                        "arguments": '{"content":"recovered"}',
+                    },
+                },
+            ),
+            reasoning_content=None,
+            retry_instruction=None,
+            usage=TokenUsage(),
+        )
+
+    service = RuntimeModelStepService(
+        session_factory=session_factory,
+        context_builder=builder,  # type: ignore[arg-type]
+        completion=complete,
+        tool_provider=_tools,
+        prompt_builder=_prompt,
+    )
+    result = await service.complete_once(state, context)
+
+    assert result.intent == "finish"
+    assert len(builder.calls) == 2
+    for call in builder.calls:
+        recovered = call["tool_execution_ledger"]["cancelled-call"]
+        assert recovered["status"] == "not_started"
+        assert recovered["may_have_side_effect"] is False
+        assert recovered["cancelled_before_execution"] is True
+
+
+@pytest.mark.asyncio
 async def test_non_vision_model_hides_only_agentbay_screenshot_reads() -> None:
     tenant_id = uuid.uuid4()
     model = _model(tenant_id)

@@ -23,6 +23,7 @@ from app.services.agent_runtime.adapter import RuntimeCommandIntake
 from app.services.agent_runtime.config import decide_runtime_v2
 from app.services.agent_runtime.channel_delivery import build_channel_delivery_route
 from app.services.agent_runtime.contracts import (
+    CancelRunCommand,
     ResumeRunCommand,
     RunHandle,
     RuntimeEventCursor,
@@ -309,17 +310,17 @@ async def _require_direct_start_allowed(
             "Direct Chat lane state does not match the target Session",
         )
     if view.execution_status == "waiting_user":
-        resume_result = await db.execute(
+        active_command = await db.execute(
             select(AgentRunCommand.id)
             .where(
                 AgentRunCommand.tenant_id == tenant_id,
                 AgentRunCommand.run_id == holder.id,
-                AgentRunCommand.command_type == "resume",
+                AgentRunCommand.command_type.in_(("resume", "cancel")),
                 AgentRunCommand.status.in_(("pending", "claimed")),
             )
             .limit(1)
         )
-        if resume_result.scalar_one_or_none() is not None:
+        if active_command.scalar_one_or_none() is not None:
             return
         raise ChatRuntimeIntakeError(
             "chat_waiting_reply_required",
@@ -604,6 +605,25 @@ async def enqueue_chat_runtime(
                 if inflight_cancel.scalar_one_or_none() is None:
                     resume_run_id = holder.id
                     resume_correlation_id = view.waiting_correlation_id
+            elif view.execution_status == "waiting_external":
+                inflight_cancel = await db.execute(
+                    select(AgentRunCommand.id).where(
+                        AgentRunCommand.tenant_id == tenant_id,
+                        AgentRunCommand.run_id == holder.id,
+                        AgentRunCommand.command_type == "cancel",
+                        AgentRunCommand.status.in_(("pending", "claimed")),
+                    ).limit(1)
+                )
+                if inflight_cancel.scalar_one_or_none() is None:
+                    cancel_adapter = RuntimeCommandIntake(db, settings=runtime_settings)
+                    await cancel_adapter.cancel_run(
+                        CancelRunCommand(
+                            tenant_id=tenant_id,
+                            run_id=holder.id,
+                            idempotency_key=f"cancel:auto_external:{holder.id}:{resolved_message_id}",
+                            reason="cancelled_by_new_chat_message",
+                        )
+                    )
 
     if resume_run_id is not None:
         resumed_run = await _require_resume_run(

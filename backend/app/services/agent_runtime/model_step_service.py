@@ -1471,7 +1471,7 @@ class RuntimeModelStepService:
         for cancelled_run_id in cancelled_run_ids:
             for call in prior_incomplete.get(cancelled_run_id, ()):
                 call_id = call.get("id")
-                if not isinstance(call_id, str) or call_id in ledger:
+                if not isinstance(call_id, str):
                     continue
                 ledger[call_id] = {
                     "status": "not_started",
