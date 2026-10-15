@@ -489,6 +489,7 @@ async def enqueue_chat_runtime(
     message_id: uuid.UUID | None = None,
     resume_run_id: uuid.UUID | None = None,
     resume_correlation_id: str | None = None,
+    auto_resume_waiting: bool = False,
     source_channel: str = "web",
     runtime_instruction: str = "",
     onboarding_target_phase: str = "",
@@ -581,6 +582,29 @@ async def enqueue_chat_runtime(
     )
     confirmation_text = (display_content or content).strip()
     resumed_run: AgentRun | None = None
+    if resume_run_id is None and auto_resume_waiting and session.session_type == "direct":
+        holder = await _direct_lane_holder(
+            db,
+            tenant_id=tenant_id,
+            agent_id=agent.id,
+            session_id=session.id,
+            user_id=user.id,
+        )
+        if holder is not None and run_state_reader is not None:
+            view = await run_state_reader.get_run_state(tenant_id, holder.id)
+            if view.execution_status == "waiting_user" and view.waiting_correlation_id:
+                inflight_cancel = await db.execute(
+                    select(AgentRunCommand.id).where(
+                        AgentRunCommand.tenant_id == tenant_id,
+                        AgentRunCommand.run_id == holder.id,
+                        AgentRunCommand.command_type == "cancel",
+                        AgentRunCommand.status.in_(("pending", "claimed")),
+                    ).limit(1)
+                )
+                if inflight_cancel.scalar_one_or_none() is None:
+                    resume_run_id = holder.id
+                    resume_correlation_id = view.waiting_correlation_id
+
     if resume_run_id is not None:
         resumed_run = await _require_resume_run(
             db,

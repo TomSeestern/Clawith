@@ -640,6 +640,49 @@ async def test_direct_start_fails_closed_while_lane_holder_waits_for_user() -> N
 
 
 @pytest.mark.asyncio
+async def test_direct_start_with_auto_resume_waiting_auto_attaches_to_waiting_holder() -> None:
+    agent, user, session, model = _records()
+    holder = _active_direct_run(agent, user, session, model)
+    # First query for holder, second query for in-flight cancel check (None),
+    # then resume run query (holder), then correlation queries.
+    db = _Session(results=([holder], None, holder, None, None))
+    run_state_reader = _run_state_reader(
+        _run_view(holder, "waiting_user", "confirm-1")
+    )
+    participant = SimpleNamespace(id=uuid.uuid4())
+    handle = _handle(agent.tenant_id)
+
+    with (
+        patch(
+            "app.services.agent_runtime.chat_intake.get_or_create_user_participant",
+            new=AsyncMock(return_value=participant),
+        ),
+        patch(
+            "app.services.agent_runtime.chat_intake.RuntimeCommandIntake.resume_run",
+            new=AsyncMock(return_value=handle),
+        ) as resume_run,
+    ):
+        result = await enqueue_chat_runtime(
+            db,  # type: ignore[arg-type]
+            agent=agent,
+            user=user,
+            session=session,
+            model=model,
+            content="Here is my reply",
+            auto_resume_waiting=True,
+            run_state_reader=run_state_reader,  # type: ignore[arg-type]
+            settings_override=_settings(enabled=True),
+        )
+
+    assert result is not None
+    assert result.resumed is True
+    resume_run.assert_awaited_once()
+    command = resume_run.await_args.args[0]
+    assert command.run_id == holder.id
+    assert command.payload["correlation_id"] == "confirm-1"
+
+
+@pytest.mark.asyncio
 async def test_direct_start_is_fifo_enqueued_while_lane_holder_is_running() -> None:
     agent, user, session, model = _records()
     holder = _active_direct_run(agent, user, session, model)

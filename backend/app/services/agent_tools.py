@@ -7817,10 +7817,11 @@ async def _execute_resolved_mcp_target_outcome(
             "MCP provider explicitly rejected the call.",
             "mcp_provider_rejected",
         )
-    except Exception:
-        return _typed_unknown(
-            "MCP call outcome is unknown after dispatch; reconcile before retrying.",
-            "mcp_call_outcome_unknown",
+    except Exception as exc:
+        logger.warning(f"[MCP] Call to {full_name} failed: {exc}")
+        return _typed_failure(
+            f"MCP tool call failed: {exc}",
+            "mcp_call_failed",
         )
     return _mcp_call_response_outcome(
         data,
@@ -7979,10 +7980,10 @@ async def _execute_via_smithery_connect_outcome(
                 },
                 headers=headers,
             )
-    except Exception:
-        return _typed_unknown(
-            "Smithery MCP call outcome is unknown after dispatch; reconcile before retrying.",
-            "mcp_call_outcome_unknown",
+    except Exception as exc:
+        return _typed_failure(
+            f"Smithery MCP call failed: {exc}",
+            "mcp_call_failed",
         )
 
     if response.status_code in {401, 403, 404}:

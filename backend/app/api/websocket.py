@@ -929,6 +929,7 @@ class WebSocketChatHandler:
                         message_id=message_id,
                         resume_run_id=resume_run_id,
                         resume_correlation_id=resume_correlation_id,
+                        auto_resume_waiting=True,
                         runtime_instruction=(onboarding.prompt if onboarding is not None else ""),
                         onboarding_target_phase=target_phase or "",
                         persist_user_message=not is_onboarding_trigger,

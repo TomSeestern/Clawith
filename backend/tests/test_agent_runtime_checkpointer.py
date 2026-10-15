@@ -182,26 +182,26 @@ def test_aes_key_length_is_validated_as_encoded_bytes() -> None:
 
 @pytest.mark.asyncio
 async def test_factory_is_lazy_and_never_runs_checkpointer_setup() -> None:
-    saver = AsyncMock()
+    class FakePool:
+        def __init__(self, *args, **kwargs) -> None:
+            self.args = args
+            self.kwargs = kwargs
 
-    class FakeManager:
-        async def __aenter__(self) -> AsyncMock:
-            return saver
+        async def __aenter__(self) -> "FakePool":
+            return self
 
         async def __aexit__(self, *args: object) -> None:
             return None
 
-    manager = FakeManager()
     with patch(
-        "app.services.agent_runtime.checkpointer.AsyncPostgresSaver.from_conn_string",
-        return_value=manager,
-    ) as factory:
+        "app.services.agent_runtime.checkpointer.AsyncConnectionPool",
+        FakePool,
+    ):
         created = create_checkpointer(_settings())
         async with created as yielded:
-            assert yielded is saver
-
-    factory.assert_called_once()
-    call = factory.call_args
-    assert call.args == ("postgresql://app:secret@db.example/clawith?options=-c%20search_path%3Dlanggraph_checkpoint%2Cpublic",)
-    assert isinstance(call.kwargs["serde"], JsonPlusSerializer)
-    saver.setup.assert_not_awaited()
+            assert isinstance(yielded, AsyncPostgresSaver)
+            assert isinstance(yielded.conn, FakePool)
+            assert yielded.conn.args == (
+                "postgresql://app:secret@db.example/clawith?options=-c%20search_path%3Dlanggraph_checkpoint%2Cpublic",
+            )
+            assert isinstance(yielded.serde, JsonPlusSerializer)

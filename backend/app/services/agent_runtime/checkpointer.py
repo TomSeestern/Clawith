@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from contextlib import AbstractAsyncContextManager
+from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, cast
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 import uuid
@@ -11,6 +12,8 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.serde.base import SerializerProtocol
 from langgraph.checkpoint.serde.encrypted import EncryptedSerializer
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 
 from app.config import Settings, get_settings
 
@@ -166,12 +169,23 @@ def checkpoint_serializer(
         raise CheckpointerConfigurationError("Checkpoint AES encryption requires pycryptodome") from exc
 
 
-def create_checkpointer(
+@asynccontextmanager
+async def create_checkpointer(
     settings: Settings | None = None,
-) -> AbstractAsyncContextManager[AsyncPostgresSaver]:
-    """Create a lazy saver context; schema setup is an explicit migration concern."""
-    manager = AsyncPostgresSaver.from_conn_string(
+) -> AsyncIterator[AsyncPostgresSaver]:
+    """Create a connection-pooled saver context with automatic reconnection."""
+    pool = AsyncConnectionPool(
         checkpoint_database_url(settings),
-        serde=checkpoint_serializer(settings),
+        max_size=10,
+        kwargs={
+            "autocommit": True,
+            "prepare_threshold": 0,
+            "row_factory": dict_row,
+        },
+        open=False,
     )
-    return cast(AbstractAsyncContextManager[AsyncPostgresSaver], manager)
+    async with pool:
+        yield AsyncPostgresSaver(
+            conn=pool,
+            serde=checkpoint_serializer(settings),
+        )
