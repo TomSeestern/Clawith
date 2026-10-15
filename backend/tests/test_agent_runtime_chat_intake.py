@@ -599,6 +599,7 @@ def _run_view(
     run: AgentRun,
     status: str,
     correlation_id: str | None = None,
+    waiting_reason: str | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         run_id=run.id,
@@ -607,6 +608,7 @@ def _run_view(
         source_type="chat",
         execution_status=status,
         waiting_correlation_id=correlation_id,
+        waiting_reason=waiting_reason,
     )
 
 
@@ -680,6 +682,54 @@ async def test_direct_start_with_auto_resume_waiting_auto_attaches_to_waiting_ho
     command = resume_run.await_args.args[0]
     assert command.run_id == holder.id
     assert command.payload["correlation_id"] == "confirm-1"
+
+
+@pytest.mark.asyncio
+async def test_direct_start_with_auto_resume_waiting_cancels_tool_reconciliation_holder() -> None:
+    agent, user, session, model = _records()
+    holder = _active_direct_run(agent, user, session, model)
+    # First query for holder, second query for in-flight cancel check (None),
+    # third query for direct start allowed active holder check ([holder]),
+    # fourth query for active_command check in direct start allowed (cancel command ID).
+    db = _Session(results=([holder], None, [holder], uuid.uuid4()))
+    run_state_reader = _run_state_reader(
+        _run_view(holder, "waiting_user", "confirm-1", waiting_reason="tool_deadline_outcome_unknown")
+    )
+    participant = SimpleNamespace(id=uuid.uuid4())
+    handle = _handle(agent.tenant_id)
+
+    with (
+        patch(
+            "app.services.agent_runtime.chat_intake.get_or_create_user_participant",
+            new=AsyncMock(return_value=participant),
+        ),
+        patch(
+            "app.services.agent_runtime.chat_intake.RuntimeCommandIntake.cancel_run",
+            new=AsyncMock(return_value=handle),
+        ) as cancel_run,
+        patch(
+            "app.services.agent_runtime.chat_intake.RuntimeCommandIntake.start_run",
+            new=AsyncMock(return_value=handle),
+        ) as start_run,
+    ):
+        result = await enqueue_chat_runtime(
+            db,  # type: ignore[arg-type]
+            agent=agent,
+            user=user,
+            session=session,
+            model=model,
+            content="Stop and try again",
+            auto_resume_waiting=True,
+            run_state_reader=run_state_reader,  # type: ignore[arg-type]
+            settings_override=_settings(enabled=True),
+        )
+
+    assert result is not None
+    assert result.resumed is False
+    cancel_run.assert_awaited_once()
+    cancel_cmd = cancel_run.await_args.args[0]
+    assert cancel_cmd.run_id == holder.id
+    start_run.assert_awaited_once()
 
 
 @pytest.mark.asyncio

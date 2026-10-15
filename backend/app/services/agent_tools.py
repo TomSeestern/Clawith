@@ -7820,7 +7820,7 @@ async def _execute_resolved_mcp_target_outcome(
     except Exception as exc:
         logger.warning(f"[MCP] Call to {full_name} failed: {exc}")
         return _typed_failure(
-            f"MCP tool call failed: {exc}",
+            f"MCP tool call failed: {type(exc).__name__}",
             "mcp_call_failed",
         )
     return _mcp_call_response_outcome(
@@ -7982,7 +7982,7 @@ async def _execute_via_smithery_connect_outcome(
             )
     except Exception as exc:
         return _typed_failure(
-            f"Smithery MCP call failed: {exc}",
+            f"Smithery MCP call failed: {type(exc).__name__}",
             "mcp_call_failed",
         )
 

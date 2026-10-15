@@ -1677,29 +1677,17 @@ class RuntimeToolStepService:
             else:
                 operation_task.cancel()
                 await asyncio.gather(operation_task, return_exceptions=True)
-                status = (
-                    "failed"
-                    if accepted.entry.effect == "read"
-                    else "unknown"
-                )
+                status = "failed"
                 result = ToolExecutionOutcome(
                     status=status,
                     result_summary=(
-                        f"Tool read exceeded its {deadline_seconds:g}s operation deadline."
-                        if status == "failed"
-                        else "Tool deadline elapsed after a possible write; reconcile before retrying."
+                        f"Tool '{accepted.entry.tool_name}' exceeded its {deadline_seconds:g}s operation deadline."
                     ),
                     result_ref=None,
-                    error_code=(
-                        "tool_deadline_exceeded"
-                        if status == "failed"
-                        else "tool_deadline_outcome_unknown"
-                    ),
+                    error_code="tool_deadline_exceeded",
                     retryable=False,
-                    model_action=(
-                        "choose_other_tool" if status == "failed" else "reconcile"
-                    ),
-                    side_effect_state="none" if status == "failed" else "unknown",
+                    model_action="choose_other_tool",
+                    side_effect_state="none" if accepted.entry.effect == "read" else "unknown",
                     metadata={
                         "deadline_policy": policy_name,
                         "deadline_seconds": deadline_seconds,

@@ -4255,6 +4255,66 @@ async def test_inflight_cancel_stops_waiting_and_marks_possible_write_unknown(
 
 
 @pytest.mark.asyncio
+async def test_deadline_exceeded_marks_status_failed_and_not_unknown(
+    monkeypatch,
+) -> None:
+    tenant_id = uuid.uuid4()
+    agent = _agent(tenant_id)
+    state = _state(tenant_id, agent, ())
+    context = _context(state)
+    operation_cancelled = asyncio.Event()
+
+    async def execute(*_args, **_kwargs):
+        try:
+            await asyncio.sleep(10.0)
+        finally:
+            operation_cancelled.set()
+
+    service = _service(agent, _CancelSource(None), execute)
+
+    async def fence(**_kwargs):
+        return None
+
+    monkeypatch.setattr(service, "_assert_execution_fence", fence)
+    monkeypatch.setattr(
+        tool_step_service,
+        "resolve_tool_deadline_seconds",
+        lambda *args, **kwargs: 0.01,
+    )
+    execution = _execution(
+        tenant_id,
+        uuid.UUID(context.run_id),
+        "controlled-call",
+        "mcp_browser_run_code_unsafe",
+    )
+
+    outcome, observed_signal = await service._execute_application_with_controls(
+        state=state,
+        context=context,
+        tenant_id=tenant_id,
+        agent=agent,
+        accepted=_accepted_for_control_test(
+            tool_name="mcp_browser_run_code_unsafe",
+            effect="external_write",
+            retry_policy="never",
+            deadline_policy="browser",
+        ),
+        arguments={},
+        reservation=_reservation(execution),
+        lease_owner=execution.lease_owner,
+    )
+
+    assert observed_signal is None
+    assert operation_cancelled.is_set()
+    assert outcome.status == "failed"
+    assert outcome.error_code == "tool_deadline_exceeded"
+    assert outcome.retryable is False
+    assert outcome.model_action == "choose_other_tool"
+    assert outcome.side_effect_state == "unknown"
+    assert outcome.metadata["deadline_exceeded"] is True
+
+
+@pytest.mark.asyncio
 async def test_long_application_handler_renews_lease_and_fences_before_return(
     monkeypatch,
 ) -> None:

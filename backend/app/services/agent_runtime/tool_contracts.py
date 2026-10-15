@@ -78,6 +78,9 @@ _DEADLINE_POLICIES = {
     "runtime_default": ToolDeadlinePolicy(
         "runtime_default", 60.0, 300.0, "stop_waiting_only"
     ),
+    "browser": ToolDeadlinePolicy(
+        "browser", 180.0, 300.0, "stop_waiting_only"
+    ),
     "network_read": ToolDeadlinePolicy(
         "network_read", 60.0, 60.0, "stop_waiting_only"
     ),
@@ -116,6 +119,8 @@ def deadline_policy_for_tool(tool_name: str) -> ToolDeadlinePolicy:
         return _DEADLINE_POLICIES["agentbay_read"]
     if tool_name in {"read_emails", "read_webpage", "jina_read"}:
         return _DEADLINE_POLICIES["network_read"]
+    if "browser" in tool_name or tool_name.startswith("mcp_"):
+        return _DEADLINE_POLICIES["browser"]
     if tool_name == "generate_image_custom":
         return _DEADLINE_POLICIES["custom_image_generation"]
     if tool_name in {

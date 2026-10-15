@@ -594,17 +594,48 @@ async def enqueue_chat_runtime(
         if holder is not None and run_state_reader is not None:
             view = await run_state_reader.get_run_state(tenant_id, holder.id)
             if view.execution_status == "waiting_user" and view.waiting_correlation_id:
-                inflight_cancel = await db.execute(
-                    select(AgentRunCommand.id).where(
-                        AgentRunCommand.tenant_id == tenant_id,
-                        AgentRunCommand.run_id == holder.id,
-                        AgentRunCommand.command_type == "cancel",
-                        AgentRunCommand.status.in_(("pending", "claimed")),
-                    ).limit(1)
+                waiting_reason = getattr(view, "waiting_reason", None)
+                is_tool_reconciliation = (
+                    waiting_reason in {
+                        "tool_reconciliation_required",
+                        "tool_outcome_unknown",
+                        "tool_deadline_outcome_unknown",
+                        "tool_cancelled_outcome_unknown",
+                    }
+                    or (isinstance(waiting_reason, str) and "unknown" in waiting_reason)
+                    or (isinstance(waiting_reason, str) and "reconcil" in waiting_reason)
                 )
-                if inflight_cancel.scalar_one_or_none() is None:
-                    resume_run_id = holder.id
-                    resume_correlation_id = view.waiting_correlation_id
+                if is_tool_reconciliation:
+                    inflight_cancel = await db.execute(
+                        select(AgentRunCommand.id).where(
+                            AgentRunCommand.tenant_id == tenant_id,
+                            AgentRunCommand.run_id == holder.id,
+                            AgentRunCommand.command_type == "cancel",
+                            AgentRunCommand.status.in_(("pending", "claimed")),
+                        ).limit(1)
+                    )
+                    if inflight_cancel.scalar_one_or_none() is None:
+                        cancel_adapter = RuntimeCommandIntake(db, settings=runtime_settings)
+                        await cancel_adapter.cancel_run(
+                            CancelRunCommand(
+                                tenant_id=tenant_id,
+                                run_id=holder.id,
+                                idempotency_key=f"cancel:auto_reconcile:{holder.id}:{resolved_message_id}",
+                                reason="cancelled_by_new_chat_message",
+                            )
+                        )
+                else:
+                    inflight_cancel = await db.execute(
+                        select(AgentRunCommand.id).where(
+                            AgentRunCommand.tenant_id == tenant_id,
+                            AgentRunCommand.run_id == holder.id,
+                            AgentRunCommand.command_type == "cancel",
+                            AgentRunCommand.status.in_(("pending", "claimed")),
+                        ).limit(1)
+                    )
+                    if inflight_cancel.scalar_one_or_none() is None:
+                        resume_run_id = holder.id
+                        resume_correlation_id = view.waiting_correlation_id
             elif view.execution_status == "waiting_external":
                 inflight_cancel = await db.execute(
                     select(AgentRunCommand.id).where(

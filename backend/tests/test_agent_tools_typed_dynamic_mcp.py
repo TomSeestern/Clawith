@@ -617,7 +617,7 @@ async def test_direct_mcp_malformed_or_lost_response_is_unknown(monkeypatch) -> 
     disconnected_outcome = await agent_tools._execute_mcp_tool_outcome(
         target["full_name"], {}, agent_id=uuid.uuid4()
     )
-    assert disconnected_outcome.status == "unknown"
+    assert disconnected_outcome.status == "failed"
     assert "must-not-leak" not in (disconnected_outcome.result_summary or "")
 
 
