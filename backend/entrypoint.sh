@@ -24,6 +24,7 @@ role_contains() {
 # --- Permission fixing and privilege dropping ---
 if [ "$(id -u)" = '0' ]; then
     echo "[entrypoint] Detected root user, checking permissions..."
+    chmod u-s /usr/bin/bwrap 2>/dev/null || true
     TARGET_DIR="${AGENT_DATA_DIR:-/data/agents}"
     if [ -d "${TARGET_DIR}" ]; then
         CURRENT_OWNER=$(stat -c '%U:%G' "${TARGET_DIR}" 2>/dev/null || echo "")

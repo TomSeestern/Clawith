@@ -900,6 +900,12 @@ class SubprocessBackend(BaseSandboxBackend):
         expected_paths = tuple(publish_paths or ())
         if existing is not None and (
             existing.process.returncode is not None
+            or (
+                hasattr(existing.process, "stdin")
+                and existing.process.stdin is not None
+                and hasattr(existing.process.stdin, "is_closing")
+                and existing.process.stdin.is_closing()
+            )
             or existing.agent_id != agent_id
             or existing.session_id != session_id
             or existing.workspace_mode != workspace_mode
@@ -1214,13 +1220,19 @@ class SubprocessBackend(BaseSandboxBackend):
                         ),
                     )
         except Exception as exc:
+            if isinstance(run_id, str) and run_id:
+                try:
+                    await SubprocessBackend.close_run(run_id)
+                except Exception:
+                    pass
+            logger.exception("[Subprocess] Persistent execution failed for run {}: {}", run_id, exc)
             return ExecutionResult(
                 success=False,
                 stdout="",
                 stderr="",
                 exit_code=1,
                 duration_ms=int((time.time() - start_time) * 1000),
-                error=f"sandbox_persistent_execution_failed: {type(exc).__name__}",
+                error=f"sandbox_persistent_execution_failed: {type(exc).__name__}: {exc}",
             )
 
         # Legacy calls without a Runtime Run retain one-shot isolation.

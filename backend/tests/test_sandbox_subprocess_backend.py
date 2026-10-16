@@ -595,3 +595,35 @@ async def test_sandbox_workspace_shadow_cloning(tmp_path: Path) -> None:
     assert (target / "new_file.txt").read_text(encoding="utf-8") == "new content"
     assert (target / "existing.txt").read_text(encoding="utf-8") == "modified hello world"
     assert not (target / "folder" / "data.csv").exists()
+
+
+@pytest.mark.asyncio
+async def test_persistent_execution_failure_closes_run_and_preserves_error_detail(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    backend = SubprocessBackend(SandboxConfig(workspace_mode="isolated_output"))
+    run_id = f"failed-run-{uuid.uuid4()}"
+    closed_runs: list[str] = []
+
+    async def fake_close_run(rid: str) -> None:
+        closed_runs.append(rid)
+
+    monkeypatch.setattr(SubprocessBackend, "close_run", fake_close_run)
+
+    async def fake_persistent_session(**_kwargs):
+        raise RuntimeError("bwrap: setuid use of bubblewrap is not supported")
+
+    monkeypatch.setattr(backend, "_persistent_session", fake_persistent_session)
+
+    result = await backend.execute(
+        code="print(1)",
+        language="python",
+        run_id=run_id,
+        work_dir=str(tmp_path),
+    )
+
+    assert result.success is False
+    assert run_id in closed_runs
+    assert "sandbox_persistent_execution_failed: RuntimeError: bwrap: setuid use of bubblewrap is not supported" in result.error
+
